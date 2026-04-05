@@ -764,6 +764,13 @@ let needSetup = false;
                 if (monitor.retryOnlyOnStatusCodeFailure !== undefined) {
                     bean.retry_only_on_status_code_failure = monitor.retryOnlyOnStatusCodeFailure;
                 }
+                // Status code based notifications mapping
+                log.info(
+                    "monitor",
+                    `Received status_code_notification_json from frontend: ${monitor.status_code_notification_json}`
+                );
+                bean.status_code_notification_json = monitor.status_code_notification_json;
+
                 bean.user_id = socket.userID;
 
                 bean.validate();
@@ -932,6 +939,12 @@ let needSetup = false;
                 bean.system_service_name = monitor.system_service_name;
                 bean.expected_tls_alert = monitor.expectedTlsAlert;
 
+                // Status code based notifications mapping
+                log.info(
+                    "monitor",
+                    `[${bean.id}] Received status_code_notification_json from frontend: ${monitor.status_code_notification_json}`
+                );
+                bean.status_code_notification_json = monitor.status_code_notification_json;
                 // ping advanced options
                 bean.ping_numeric = monitor.ping_numeric;
                 bean.ping_count = monitor.ping_count;

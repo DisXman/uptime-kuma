@@ -40,6 +40,7 @@ class Heartbeat extends BeanModel {
             duration: this._duration,
             retries: this._retries,
             response: this._response,
+            httpStatusCode: this._httpStatusCode,
         };
     }
 
@@ -59,6 +60,7 @@ class Heartbeat extends BeanModel {
             duration: this._duration,
             retries: this._retries,
             response: opts?.decodeResponse ? await Heartbeat.decodeResponseValue(this._response) : undefined,
+            httpStatusCode: this._httpStatusCode,
         };
     }
 

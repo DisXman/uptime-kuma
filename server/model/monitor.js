@@ -213,6 +213,9 @@ class Monitor extends BeanModel {
             saveResponse: this.getSaveResponse(),
             saveErrorResponse: this.getSaveErrorResponse(),
             responseMaxLength: this.response_max_length ?? RESPONSE_BODY_LENGTH_DEFAULT,
+
+            // status code based notifications mapping
+            status_code_notification_json: this.status_code_notification_json,
         };
 
         if (includeSensitiveData) {
@@ -359,6 +362,43 @@ class Monitor extends BeanModel {
      */
     getAcceptedStatuscodes() {
         return JSON.parse(this.accepted_statuscodes_json);
+    }
+
+    /**
+     * Get status code to notification mapping
+     * @returns {object|null} Status code to notification IDs mapping
+     */
+    getStatusCodeNotificationMap() {
+        if (!this.status_code_notification_json) {
+            return null;
+        }
+
+        // If it's already an object, return it directly
+        if (typeof this.status_code_notification_json === "object") {
+            return this.status_code_notification_json;
+        }
+
+        try {
+            return JSON.parse(this.status_code_notification_json);
+        } catch (e) {
+            log.error(
+                "monitor",
+                `[${this.name}] Failed to parse status_code_notification_json: ${e.message}. Value: ${this.status_code_notification_json}`
+            );
+            return null;
+        }
+    }
+
+    /**
+     * Set status code to notification mapping
+     * @param {object|null} map Status code to notification IDs mapping
+     */
+    setStatusCodeNotificationMap(map) {
+        if (map === null || map === undefined) {
+            this.status_code_notification_json = null;
+        } else {
+            this.status_code_notification_json = JSON.stringify(map);
+        }
     }
 
     /**
@@ -636,6 +676,8 @@ class Monitor extends BeanModel {
 
                     bean.msg = `${res.status} - ${res.statusText}`;
                     bean.ping = dayjs().valueOf() - startTime;
+                    // Store HTTP status code for status code based notifications
+                    bean.http_status_code = res.status;
 
                     // in the frontend, the save response is only shown if the saveErrorResponse is set
                     if (this.getSaveResponse() && this.getSaveErrorResponse()) {
@@ -951,6 +993,10 @@ class Monitor extends BeanModel {
                     bean.msg = `timeout by AbortSignal (${this.timeout}s)`;
                 } else {
                     bean.msg = error.message;
+                }
+
+                if (error?.response?.status) {
+                    bean.http_status_code = error.response.status;
                 }
 
                 if (this.getSaveErrorResponse() && error?.response?.data !== undefined) {
@@ -1514,17 +1560,19 @@ class Monitor extends BeanModel {
 
             // Calculate downtime tracking information when service comes back up
             // This makes downtime information available to all notification providers
+            let lastDownHttpStatusCode = null;
             if (bean.status === UP && monitor.id) {
                 try {
                     // Filter by important = 1 to get the state transition heartbeat (e.g. UP→DOWN),
                     // not the most recent DOWN heartbeat which would be the last check before recovery.
                     const lastDownHeartbeat = await R.getRow(
-                        "SELECT time FROM heartbeat WHERE monitor_id = ? AND status = ? AND important = 1 ORDER BY time DESC LIMIT 1",
+                        "SELECT time, http_status_code FROM heartbeat WHERE monitor_id = ? AND status = ? AND important = 1 ORDER BY time DESC LIMIT 1",
                         [monitor.id, DOWN]
                     );
 
                     if (lastDownHeartbeat && lastDownHeartbeat.time) {
                         heartbeatJSON["lastDownTime"] = lastDownHeartbeat.time;
+                        lastDownHttpStatusCode = lastDownHeartbeat.http_status_code;
                     }
                 } catch (error) {
                     // If we can't calculate downtime, just continue without it
@@ -1536,7 +1584,90 @@ class Monitor extends BeanModel {
                 }
             }
 
-            for (let notification of notificationList) {
+            // Check if there's a specific HTTP status code with notification mapping
+            let filteredNotifications = notificationList;
+            const currentHttpStatusCode = bean.http_status_code || bean.httpStatusCode;
+            const targetStatusCode = bean.status === DOWN ? currentHttpStatusCode : lastDownHttpStatusCode;
+
+            log.info(
+                "monitor",
+                `[${monitor.name}] Notification Filtering - Status: ${bean.status === UP ? "UP" : "DOWN"}, Code: ${targetStatusCode}`
+            );
+
+            const statusCodeMap = monitor.getStatusCodeNotificationMap();
+            log.info(
+                "monitor",
+                `[${monitor.name}] Final Filter Check. Map exists: ${!!(statusCodeMap && Object.keys(statusCodeMap).length > 0)}`
+            );
+
+            if (statusCodeMap && Object.keys(statusCodeMap).length > 0) {
+                log.info("monitor", `[${monitor.name}] Filter is ACTIVE. Mappings: ${JSON.stringify(statusCodeMap)}`);
+
+                let mappedNotificationIds = null;
+
+                if (targetStatusCode !== null && targetStatusCode !== undefined) {
+                    const currentCodeStr = targetStatusCode.toString();
+
+                    // 1. Exact match
+                    if (statusCodeMap[currentCodeStr]) {
+                        mappedNotificationIds = statusCodeMap[currentCodeStr];
+                        log.info("monitor", `[${monitor.name}] Exact match found for ${currentCodeStr}`);
+                    } else {
+                        // 2. Range or wildcard match
+                        for (const pattern in statusCodeMap) {
+                            // Wildcard match (e.g. 5xx)
+                            if (pattern.toLowerCase().endsWith("xx")) {
+                                const prefix = pattern.slice(0, -2);
+                                if (currentCodeStr.startsWith(prefix)) {
+                                    mappedNotificationIds = statusCodeMap[pattern];
+                                    log.info("monitor", `[${monitor.name}] Wildcard match found for ${pattern}`);
+                                    break;
+                                }
+                            }
+                            // Range match (e.g. 500-505)
+                            if (pattern.includes("-")) {
+                                const [start, end] = pattern.split("-").map(Number);
+                                const codeNum = Number(targetStatusCode);
+                                if (codeNum >= start && codeNum <= end) {
+                                    mappedNotificationIds = statusCodeMap[pattern];
+                                    log.info("monitor", `[${monitor.name}] Range match found for ${pattern}`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (mappedNotificationIds) {
+                    // Ensure ID comparison works (both should be numbers or strings)
+                    filteredNotifications = notificationList.filter((n) => {
+                        return mappedNotificationIds.some((id) => id.toString() === n.id.toString());
+                    });
+
+                    if (filteredNotifications.length === 0) {
+                        log.info(
+                            "monitor",
+                            `[${monitor.name}] No matching notification channels for this code. BLOCKING.`
+                        );
+                        return; // Silent - don't send any notification
+                    }
+
+                    log.info(
+                        "monitor",
+                        `[${monitor.name}] Filter matched. Sending to: ${filteredNotifications.map((n) => n.name).join(", ")}`
+                    );
+                } else {
+                    log.info(
+                        "monitor",
+                        `[${monitor.name}] NO MATCH for code [${targetStatusCode}]. Filter is active, so BLOCKING ALL.`
+                    );
+                    return; // DON'T SEND ANYTHING
+                }
+            } else {
+                log.info("monitor", `[${monitor.name}] No filter defined. Sending to all notifications.`);
+            }
+
+            for (let notification of filteredNotifications) {
                 try {
                     await Notification.send(
                         JSON.parse(notification.config),

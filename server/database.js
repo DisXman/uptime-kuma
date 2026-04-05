@@ -275,6 +275,7 @@ class Database {
                     // See: https://github.com/knex/knex/issues/3176#issuecomment-3389054899
                     min: 0,
                     max: 20,
+                    propagateCreateError: false,
                     acquireTimeoutMillis: acquireConnectionTimeout,
                     afterCreate: (rawConn, done) => {
                         this.initSQLite(rawConn, testMode)

@@ -1270,5 +1270,16 @@
     "Ignore Sec-WebSocket-Accept header": "{0} başlığını yoksay",
     "versionIs": "Versiyon: {version}",
     "Certificate Chain:": "Sertifika Zinciri:",
-    "Examples:": "Örnekler: {0}"
+    "Examples:": "Örnekler: {0}",
+    "statusCodeBasedNotifications": "Hata Koduna Göre Bildirimler",
+    "statusCode": "Hata Kodu",
+    "statusCodeInputHelp": "Tek kod gir (örn. 404) veya aralık (örn. 502-503)",
+    "currentMappings": "Mevcut Eşlemeler",
+    "noStatusCodeMappings": "Henüz herhangi bir hata kodu eşlemesi yapılandırılmadı",
+    "statusCodeBasedNotificationsHelp": "Belirli HTTP hata kodları için hangi bildirim kanallarının kullanılacağını belirleyin. Bu özellik 'Kabul Edilen Durum Kodları' ile birlikte çalışır: Sadece bir kod kabul edilmediğinde (servis HİZMET DIŞI olduğunda) bu özel bildirimler tetiklenir. Not: Eğer en az bir eşleme tanımlanırsa, SADECE bu listedeki kodlar için bildirim gönderilir; diğer tüm kabul edilmeyen kodlar görmezden gelinir.",
+    "statusCodeMappingAdded": "Hata kodu eşlemesi başarıyla eklendi",
+    "statusCodeMappingRemoved": "Hata kodu eşlemesi başarıyla kaldırıldı",
+    "pleaseEnterStatusCode": "Lütfen bir hata kodu girin",
+    "invalidStatusCodeFormat": "Geçersiz hata kodu formatı. Örn. 404, 500-505 veya 5xx kullanın",
+    "pleaseSelectAtLeastOneNotification": "Lütfen en az bir bildirim seçin"
 }

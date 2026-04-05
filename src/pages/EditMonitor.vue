@@ -1634,7 +1634,109 @@
                                     {{ $t("cacheBusterParamDescription") }}
                                 </div>
                             </div>
+                            <!-- Status Code Based Notifications (HTTP/Keyword/JSON Query only) -->
+                            <div
+                                v-if="
+                                    monitor.type === 'http' ||
+                                    monitor.type === 'keyword' ||
+                                    monitor.type === 'json-query'
+                                "
+                                class="my-3"
+                            >
+                                <label class="form-label">{{ $t("statusCodeBasedNotifications") }}</label>
+                                <div class="card bg-transparent border-0">
+                                    <div class="card-body p-0">
+                                        <div class="row">
+                                            <div class="col-md-5">
+                                                <label class="form-label">{{ $t("statusCode") }}</label>
+                                                <input
+                                                    v-model="statusCodeInput"
+                                                    type="text"
+                                                    class="form-control"
+                                                    :placeholder="$t('e.g., 404 or 502-503')"
+                                                />
+                                                <small class="form-text text-muted">
+                                                    {{ $t("statusCodeInputHelp") }}
+                                                </small>
+                                            </div>
+                                            <div class="col-md-5">
+                                                <label class="form-label">{{ $t("Notifications") }}</label>
+                                                <VueMultiselect
+                                                    v-model="statusCodeNotificationSelection"
+                                                    :options="$root.notificationList"
+                                                    :multiple="true"
+                                                    :close-on-select="false"
+                                                    :clear-on-select="false"
+                                                    :preserve-search="true"
+                                                    :placeholder="$t('Pick Notifications...')"
+                                                    :max-height="300"
+                                                    track-by="id"
+                                                    label="name"
+                                                ></VueMultiselect>
+                                            </div>
+                                            <div class="col-md-2 d-flex align-items-end">
+                                                <button
+                                                    type="button"
+                                                    class="btn btn-primary w-100"
+                                                    @click="addStatusCodeMapping"
+                                                >
+                                                    {{ $t("Add") }}
+                                                </button>
+                                            </div>
+                                        </div>
 
+                                        <!-- Mapping liste -->
+                                        <div v-if="Object.keys(statusCodeNotificationMap).length > 0" class="mt-3">
+                                            <h6>{{ $t("currentMappings") }}</h6>
+                                            <div class="table-responsive">
+                                                <table class="table table-sm table-hover">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>{{ $t("statusCode") }}</th>
+                                                            <th>{{ $t("Notifications") }}</th>
+                                                            <th>{{ $t("Action") }}</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <tr
+                                                            v-for="(notifIds, code) in statusCodeNotificationMap"
+                                                            :key="code"
+                                                        >
+                                                            <td>
+                                                                <strong>{{ code }}</strong>
+                                                            </td>
+                                                            <td>
+                                                                <span
+                                                                    v-for="notifId in notifIds"
+                                                                    :key="notifId"
+                                                                    class="badge bg-info me-1"
+                                                                >
+                                                                    {{ getNotificationName(notifId) }}
+                                                                </span>
+                                                            </td>
+                                                            <td>
+                                                                <button
+                                                                    type="button"
+                                                                    class="btn btn-sm btn-danger"
+                                                                    @click="removeStatusCodeMapping(code)"
+                                                                >
+                                                                    {{ $t("Remove") }}
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                        <div v-else class="mt-2 text-muted small">
+                                            {{ $t("noStatusCodeMappings") }}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="form-text">
+                                    {{ $t("statusCodeBasedNotificationsHelp") }}
+                                </div>
+                            </div>
                             <div class="my-3 form-check">
                                 <input
                                     id="upside-down"
@@ -2904,6 +3006,7 @@ const monitorDefaults = {
     rabbitmqPassword: "",
     conditions: [],
     system_service_name: "",
+    status_code_notification_json: null,
 };
 
 export default {
@@ -2931,6 +3034,9 @@ export default {
                 notificationIDList: {},
                 // Do not add default value here, please check init() method
             },
+            statusCodeInput: "",
+            statusCodeNotificationSelection: [],
+            statusCodeNotificationMap: {},
             domainExpiryUnsupportedReason: null,
             checkDomainDebounce: null,
             acceptedStatusCodeOptions: [],
@@ -3545,7 +3651,9 @@ message HealthCheckResponse {
                     ping_numeric: true,
                     packetSize: 56,
                     ping_per_request_timeout: 2,
+                    status_code_notification_json: null,
                 };
+                this.statusCodeNotificationMap = {};
 
                 if (this.$root.proxyList && !this.monitor.proxyId) {
                     const proxy = this.$root.proxyList.find((proxy) => proxy.default);
@@ -3571,6 +3679,16 @@ message HealthCheckResponse {
                         }
 
                         this.monitor = res.monitor;
+                        // Parse status code notification map from JSON
+                        if (this.monitor.status_code_notification_json) {
+                            try {
+                                this.statusCodeNotificationMap = JSON.parse(this.monitor.status_code_notification_json);
+                            } catch (e) {
+                                this.statusCodeNotificationMap = {};
+                            }
+                        } else {
+                            this.statusCodeNotificationMap = {};
+                        }
 
                         if (this.isClone) {
                             /*
@@ -3824,6 +3942,15 @@ message HealthCheckResponse {
             if (this.monitor.body && (!this.monitor.httpBodyEncoding || this.monitor.httpBodyEncoding === "json")) {
                 this.monitor.body = JSON.stringify(JSON.parse(this.monitor.body), null, 4);
             }
+            // Convert status code notification map to JSON
+            console.log("Current statusCodeNotificationMap:", this.statusCodeNotificationMap);
+            if (this.statusCodeNotificationMap && Object.keys(this.statusCodeNotificationMap).length > 0) {
+                this.monitor.status_code_notification_json = JSON.stringify(this.statusCodeNotificationMap);
+                console.log("Set monitor.status_code_notification_json to:", this.monitor.status_code_notification_json);
+            } else {
+                this.monitor.status_code_notification_json = null;
+                console.log("Set monitor.status_code_notification_json to null");
+            }
 
             const monitorTypesWithEncodingAllowed = ["http", "keyword", "json-query"];
             if (this.monitor.type && !monitorTypesWithEncodingAllowed.includes(this.monitor.type)) {
@@ -4033,6 +4160,91 @@ message HealthCheckResponse {
                     }
                 });
             }, 500);
+        },
+        /**
+         * Add status code to notification mapping
+         * @returns {void}
+         */
+        addStatusCodeMapping() {
+            if (!this.statusCodeInput || !this.statusCodeInput.trim()) {
+                this.$root.toastRes({
+                    ok: false,
+                    msg: "pleaseEnterStatusCode",
+                    msgi18n: true,
+                });
+                return;
+            }
+
+            const code = this.statusCodeInput.trim();
+
+            // Validate status code format
+            const isExact = /^\d{3}$/.test(code);
+            const isRange = /^\d{3}-\d{3}$/.test(code);
+            const isWildcard = /^\d{1,2}xx$/i.test(code);
+
+            if (!isExact && !isRange && !isWildcard) {
+                this.$root.toastRes({
+                    ok: false,
+                    msg: "invalidStatusCodeFormat",
+                    msgi18n: true,
+                });
+                return;
+            }
+
+            if (!this.statusCodeNotificationSelection || this.statusCodeNotificationSelection.length === 0) {
+                this.$root.toastRes({
+                    ok: false,
+                    msg: "pleaseSelectAtLeastOneNotification",
+                    msgi18n: true,
+                });
+                return;
+            }
+
+            const notifIds = this.statusCodeNotificationSelection.map((n) => n.id);
+
+            // Add or update the mapping
+            // Ensure reactivity by creating a new object if necessary
+            const newMap = { ...this.statusCodeNotificationMap };
+            newMap[code] = notifIds;
+            this.statusCodeNotificationMap = newMap;
+
+            // Clear inputs
+            this.statusCodeInput = "";
+            this.statusCodeNotificationSelection = [];
+
+            // Success message
+            this.$root.toastRes({
+                ok: true,
+                msg: "statusCodeMappingAdded",
+                msgi18n: true,
+            });
+        },
+
+        /**
+         * Remove status code mapping
+         * @param {string} code Status code to remove
+         * @returns {void}
+         */
+        removeStatusCodeMapping(code) {
+            const newMap = { ...this.statusCodeNotificationMap };
+            delete newMap[code];
+            this.statusCodeNotificationMap = newMap;
+
+            this.$root.toastRes({
+                ok: true,
+                msg: "statusCodeMappingRemoved",
+                msgi18n: true,
+            });
+        },
+
+        /**
+         * Get notification name by ID
+         * @param {number} notifId Notification ID
+         * @returns {string} Notification name
+         */
+        getNotificationName(notifId) {
+            const notif = this.$root.notificationList.find((n) => n.id === notifId);
+            return notif ? notif.name : `Notification #${notifId}`;
         },
     },
 };
