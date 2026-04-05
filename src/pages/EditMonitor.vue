@@ -1709,7 +1709,7 @@
                                                                 <span
                                                                     v-for="notifId in notifIds"
                                                                     :key="notifId"
-                                                                    class="badge bg-info me-1"
+                                                                    class="badge rounded-1 bg-info me-1"
                                                                 >
                                                                     {{ getNotificationName(notifId) }}
                                                                 </span>
