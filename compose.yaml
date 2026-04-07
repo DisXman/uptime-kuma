@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/dockerfile
+      target: release
     container_name: uptime-kuma
     restart: unless-stopped
     ports:
