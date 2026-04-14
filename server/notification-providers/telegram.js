@@ -68,6 +68,30 @@ class Telegram extends NotificationProvider {
                 let monitorJSONCopy = monitorJSON;
                 let heartbeatJSONCopy = heartbeatJSON;
 
+                /* ---------------*/
+                if (heartbeatJSON) {
+                    let finalDuration = heartbeatJSON.duration;
+
+                    // Eğer duration boşsa ama lastDownTime varsa, süreyi manuel hesapla
+                    if (!finalDuration && heartbeatJSON.lastDownTime) {
+                        const downTime = new Date(heartbeatJSON.lastDownTime).getTime();
+                        const upTime = new Date(heartbeatJSON.time).getTime();
+                        const diffSeconds = Math.floor((upTime - downTime) / 1000);
+
+                        if (diffSeconds > 0) {
+                            const minutes = Math.floor(diffSeconds / 60);
+                            const seconds = diffSeconds % 60;
+                            finalDuration = `${minutes}m ${seconds}s`;
+                        }
+                    }
+
+                    if (finalDuration) {
+                        // Hem msg içine ekle hem de şablonda {{ duration }} olarak kullanılmasını sağla
+                        msg = msg + `\n⏱ Time: ${finalDuration}`;
+                        heartbeatJSONCopy.duration = finalDuration;
+                    }
+                } /*------------*/
+
                 if (notification.telegramTemplateParseMode === "MarkdownV2") {
                     msg = this.escapeMarkdownV2(msg);
 
