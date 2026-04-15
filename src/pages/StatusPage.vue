@@ -488,11 +488,23 @@
                     👀 {{ $t("statusPageNothing") }}
                 </div>
 
+                <div v-if="!config.showOnlyLastHeartbeat" class="mb-4 d-flex justify-content-end align-items-center duration-selector">
+                    <span class="me-2 text-secondary small">{{ $t("Uptime") }}:</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '24' }" @click="setDuration('24')">1d</button>
+                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '48' }" @click="setDuration('48')">2d</button>
+                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '72' }" @click="setDuration('72')">3d</button>
+                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '96' }" @click="setDuration('96')">4d</button>
+                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '120' }" @click="setDuration('120')">5d</button>
+                    </div>
+                </div>
+
                 <PublicGroupList
                     :edit-mode="enableEditMode"
                     :show-tags="config.showTags"
                     :show-certificate-expiry="config.showCertificateExpiry"
                     :show-only-last-heartbeat="config.showOnlyLastHeartbeat"
+                    :duration="duration"
                 />
             </div>
 
@@ -698,6 +710,8 @@ export default {
             imgDataUrl: "/icon.svg",
             loadedTheme: false,
             loadedData: false,
+            duration: "24",
+            maxBeat: 100,
             baseURL: "",
             clickedEditButton: false,
             maintenanceList: [],
@@ -1074,7 +1088,14 @@ export default {
         updateHeartbeatList() {
             // If editMode, it will use the data from websocket.
             if (!this.editMode) {
-                axios.get("/api/status-page/heartbeat/" + this.slug).then((res) => {
+                // Add a timestamp to bypass any browser cache
+                axios.get("/api/status-page/heartbeat/" + this.slug, {
+                    params: {
+                        duration: this.duration,
+                        numPoints: this.maxBeat,
+                        t: Date.now(),
+                    },
+                }).then((res) => {
                     const { heartbeatList, uptimeList } = res.data;
 
                     this.$root.heartbeatList = heartbeatList;
@@ -1099,6 +1120,28 @@ export default {
                     this.updateUpdateTimer();
                 });
             }
+        },
+
+        /**
+         * Reload heartbeat data with a specific number of points
+         * @param {number} numPoints Number of points to fetch
+         * @returns {void}
+         */
+        reloadHeartbeatData(numPoints) {
+            if (numPoints !== this.maxBeat) {
+                this.maxBeat = numPoints;
+                this.updateHeartbeatList();
+            }
+        },
+
+        /**
+         * Set the duration for heartbeat data
+         * @param {string} duration Duration in hours
+         * @returns {void}
+         */
+        setDuration(duration) {
+            this.duration = duration;
+            this.updateHeartbeatList();
         },
 
         /**

@@ -7,6 +7,9 @@ const { R } = require("redbean-node");
 const { badgeConstants } = require("../../src/util");
 const { makeBadge } = require("badge-maker");
 const { UptimeCalculator } = require("../uptime-calculator");
+const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
+dayjs.extend(utc);
 
 let router = express.Router();
 
@@ -61,7 +64,7 @@ router.get("/api/status-page/:slug", cache("5 minutes"), async (request, respons
 
 // Status Page Polling Data
 // Can fetch only if published
-router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (request, response) => {
+router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (request, response) => {
     allowDevAllOrigin(response);
 
     try {
@@ -71,6 +74,17 @@ router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (reques
         let slug = request.params.slug;
         slug = slug.toLowerCase();
         let statusPageID = await StatusPage.slugToID(slug);
+
+        // Get duration and numPoints from query
+        let duration = request.query.duration || "24";
+        let durationHours = parseInt(duration);
+
+        let numPoints = parseInt(request.query.numPoints) || 100;
+        // Cap numPoints to reasonable values
+        numPoints = Math.max(10, Math.min(200, numPoints));
+
+        // Use a single "now" for all monitors to ensure consistency
+        let now = dayjs().utc();
 
         let monitorIDList = await R.getCol(
             `
@@ -83,19 +97,96 @@ router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (reques
         );
 
         for (let monitorID of monitorIDList) {
-            let list = await R.getAll(
-                `
-                    SELECT * FROM heartbeat
-                    WHERE monitor_id = ?
-                    ORDER BY time DESC
-                    LIMIT 100
-            `,
-                [monitorID]
+            let result = [];
+            let startTime = now.subtract(durationHours, "hour");
+
+            // Spread points from startTime to now exactly
+            // Step size = (duration in seconds) / (numPoints - 1)
+            const stepSeconds = (durationHours * 3600) / (numPoints - 1);
+
+            // Fetch the last heartbeat BEFORE the startTime to know the initial state
+            // Use SQL_DATETIME_FORMAT for consistency
+            const SQL_DATETIME_FORMAT = "YYYY-MM-DD HH:mm:ss";
+            let initialHeartbeat = await R.getRow(
+                "SELECT status FROM heartbeat WHERE monitor_id = ? AND time < ? ORDER BY time DESC LIMIT 1",
+                [monitorID, startTime.format(SQL_DATETIME_FORMAT)]
             );
 
-            list = R.convertToBeans("heartbeat", list);
-            heartbeatList[monitorID] = list.reverse().map((row) => row.toPublicJSON());
+            let currentStatus = initialHeartbeat && initialHeartbeat.status !== 2 ? initialHeartbeat.status : 1; // Default to UP if no data or pending
 
+            // Fetch raw heartbeats for the period for better accuracy (up to 5 days is fine)
+            let heartbeats = await R.getAll(
+                `
+                SELECT status, time, ping FROM heartbeat
+                WHERE monitor_id = ? AND time >= ?
+                ORDER BY time ASC
+            `,
+                [monitorID, startTime.format(SQL_DATETIME_FORMAT)]
+            );
+
+            // Aggregate heartbeats into buckets
+            for (let i = 0; i < numPoints; i++) {
+                let bucketTime = startTime.add(i * stepSeconds, "second");
+                // For the very last point, ensure it's exactly 'now' to avoid "X minutes ago"
+                if (i === numPoints - 1) {
+                    bucketTime = now;
+                }
+
+                // Use a slightly larger window for bucket matching to avoid missing heartbeats
+                // precisely at the boundaries
+                let bucketStartTime = bucketTime.subtract(stepSeconds / 2, "second");
+                let bucketEndTime = bucketTime.add(stepSeconds / 2, "second");
+
+                let heartbeatsInBucket = heartbeats.filter((h) => {
+                    // Database time is UTC string, parse it as UTC
+                    let hTime = dayjs.utc(h.time);
+                    return (
+                        (hTime.isAfter(bucketStartTime) || hTime.isSame(bucketStartTime)) &&
+                        hTime.isBefore(bucketEndTime)
+                    );
+                });
+
+                let status = currentStatus;
+                let avgPing = null;
+                let bucketTimestamp = bucketTime.toISOString(); // Default to bucket center
+
+                if (heartbeatsInBucket.length > 0) {
+                    // Find the "representative" heartbeat for this bucket
+                    // Priority: DOWN (0) > MAINTENANCE (3) > UP (1)
+                    let downBeat = heartbeatsInBucket.find((h) => h.status === 0);
+                    let maintenanceBeat = heartbeatsInBucket.find((h) => h.status === 3);
+                    let upBeat = heartbeatsInBucket.at(-1); // Get latest for UP
+
+                    if (downBeat) {
+                        status = 0;
+                        bucketTimestamp = dayjs.utc(downBeat.time).toISOString();
+                    } else if (maintenanceBeat) {
+                        status = 3;
+                        bucketTimestamp = dayjs.utc(maintenanceBeat.time).toISOString();
+                    } else if (upBeat) {
+                        status = 1;
+                        bucketTimestamp = dayjs.utc(upBeat.time).toISOString();
+                    }
+
+                    // Update currentStatus for the next bucket
+                    currentStatus = status;
+
+                    let upBeats = heartbeatsInBucket.filter((h) => h.status === 1);
+                    if (upBeats.length > 0) {
+                        avgPing = upBeats.reduce((sum, h) => sum + (h.ping || 0), 0) / upBeats.length;
+                    }
+                }
+
+                result.push({
+                    status: status,
+                    // Send actual DB timestamp for tooltip accuracy
+                    time: bucketTimestamp,
+                    ping: avgPing,
+                    msg: "",
+                });
+            }
+
+            heartbeatList[monitorID] = result;
             const uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
             uptimeList[`${monitorID}_24`] = uptimeCalculator.get24Hour().uptime;
         }

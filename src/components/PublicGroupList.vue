@@ -117,7 +117,7 @@
                                         </div>
                                     </div>
                                     <div :key="$root.userHeartbeatBar" class="col-3 col-xl-6">
-                                        <HeartbeatBar size="mid" :monitor-id="monitor.element.id" />
+                                        <HeartbeatBar size="mid" :monitor-id="monitor.element.id" :duration="duration" />
                                     </div>
                                 </div>
                             </div>
@@ -166,6 +166,11 @@ export default {
         /** Should only the last heartbeat be shown? */
         showOnlyLastHeartbeat: {
             type: Boolean,
+        },
+        /** Heartbeat bar duration in hours */
+        duration: {
+            type: [Number, String],
+            default: 24,
         },
     },
     data() {
