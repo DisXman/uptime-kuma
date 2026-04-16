@@ -1104,7 +1104,7 @@ export default {
                     const heartbeatIds = Object.keys(heartbeatList);
                     const downMonitors = heartbeatIds.reduce((downMonitorsAmount, currentId) => {
                         const monitorHeartbeats = heartbeatList[currentId];
-                        const lastHeartbeat = monitorHeartbeats.at(-1);
+                        const lastHeartbeat = monitorHeartbeats && monitorHeartbeats.length > 0 ? monitorHeartbeats[monitorHeartbeats.length - 1] : null;
 
                         if (lastHeartbeat) {
                             return lastHeartbeat.status === 0 ? downMonitorsAmount + 1 : downMonitorsAmount;
@@ -1130,7 +1130,12 @@ export default {
         reloadHeartbeatData(numPoints) {
             if (numPoints !== this.maxBeat) {
                 this.maxBeat = numPoints;
-                this.updateHeartbeatList();
+                if (this.resizeTimeout) {
+                    clearTimeout(this.resizeTimeout);
+                }
+                this.resizeTimeout = setTimeout(() => {
+                    this.updateHeartbeatList();
+                }, 500);
             }
         },
 

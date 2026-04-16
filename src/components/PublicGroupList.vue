@@ -77,7 +77,7 @@
                                                 v-if="showOnlyLastHeartbeat"
                                                 :status="statusOfLastHeartbeat(monitor.element.id)"
                                             />
-                                            <Uptime v-else :monitor="monitor.element" type="24" :pill="true" />
+                                            <Uptime v-else :monitor="monitor.element" :type="duration" :pill="true" />
                                             <a
                                                 v-if="showLink(monitor)"
                                                 :href="monitor.element.url"
@@ -91,6 +91,13 @@
                                             <p v-else class="item-name" data-testid="monitor-name">
                                                 {{ monitor.element.name }}
                                             </p>
+                                            <font-awesome-icon
+                                                icon="info-circle"
+                                                class="action ms-2"
+                                                style="cursor: pointer; color: #a9a9a9; margin-left: 10px;"
+                                                title="Çökme Geçmişi"
+                                                @click="$refs.downtimeDetailsDialog.show($route.params.slug, monitor.element.id, duration, monitor.element.name)"
+                                            />
                                         </div>
                                         <div class="extra-info">
                                             <div
@@ -128,10 +135,12 @@
         </template>
     </Draggable>
     <MonitorSettingDialog ref="monitorSettingDialog" />
+    <DowntimeDetailsDialog ref="downtimeDetailsDialog" />
 </template>
 
 <script>
 import MonitorSettingDialog from "./MonitorSettingDialog.vue";
+import DowntimeDetailsDialog from "./DowntimeDetailsDialog.vue";
 import Draggable from "vuedraggable";
 import HeartbeatBar from "./HeartbeatBar.vue";
 import Uptime from "./Uptime.vue";
@@ -142,6 +151,7 @@ import GroupSortDropdown from "./GroupSortDropdown.vue";
 export default {
     components: {
         MonitorSettingDialog,
+        DowntimeDetailsDialog,
         Draggable,
         HeartbeatBar,
         Uptime,
