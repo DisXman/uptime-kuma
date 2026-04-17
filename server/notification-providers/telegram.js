@@ -87,7 +87,7 @@ class Telegram extends NotificationProvider {
 
                     if (finalDuration) {
                         // Hem msg içine ekle hem de şablonda {{ duration }} olarak kullanılmasını sağla
-                        msg = msg + `\n⏱ Time: ${finalDuration}`;
+                        msg = `⏱ Süre: ${finalDuration}\n` + msg;
                         heartbeatJSONCopy.duration = finalDuration;
                     }
                 } /*------------*/

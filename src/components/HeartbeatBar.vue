@@ -68,11 +68,6 @@ export default {
             type: Number,
             default: 0,
         },
-        /** Heartbeat bar duration in hours */
-        duration: {
-            type: [Number, String],
-            default: 0,
-        },
     },
     data() {
         return {
@@ -99,9 +94,6 @@ export default {
          * @returns {number} Number of days for heartbeat bar
          */
         normalizedHeartbeatBarDays() {
-            if (this.duration && this.duration > 0) {
-                return parseFloat(this.duration) / 24;
-            }
             return Math.max(0, Math.min(365, Math.floor(this.heartbeatBarDays || 0)));
         },
 
@@ -149,20 +141,15 @@ export default {
                 return [];
             }
 
-            // In days mode, we show exactly what the server sent.
-            // Slicing here would break the time range (e.g. 24h would become 18h).
-            if (this.normalizedHeartbeatBarDays > 0 && this.beatList.length > 0) {
-                return this.beatList;
-            }
-
-            // Original logic for auto mode (heartbeatBarDays = 0)
-            let placeholders = [];
-
             // Handle case where maxBeat is -1 (no limit)
             if (this.maxBeat <= 0) {
                 return this.beatList;
             }
 
+            // For both configured days and auto mode, show only what fits on screen
+            // The server provides consistent data (300 buckets for configured days, 100 beats for auto)
+            // We slice to show only what fits in the current container width
+            let placeholders = [];
             let start = this.beatList.length - this.maxBeat;
 
             if (this.move) {
@@ -233,17 +220,13 @@ export default {
          * @returns {string} The time elapsed in minutes or hours.
          */
         timeSinceFirstBeat() {
-            if (this.normalizedHeartbeatBarDays > 0) {
-                if (this.normalizedHeartbeatBarDays < 1) {
-                    return Math.round(this.normalizedHeartbeatBarDays * 24) + "h";
-                }
-                if (this.normalizedHeartbeatBarDays === 1) {
-                    return this.normalizedHeartbeatBarDays * 24 + "h";
-                }
-                if (this.normalizedHeartbeatBarDays >= 2) {
-                    return this.normalizedHeartbeatBarDays + "d";
-                }
+            if (this.normalizedHeartbeatBarDays === 1) {
+                return this.normalizedHeartbeatBarDays * 24 + "h";
             }
+            if (this.normalizedHeartbeatBarDays >= 2) {
+                return this.normalizedHeartbeatBarDays + "d";
+            }
+
             // Need to calculate from actual data
             const firstValidBeat = this.shortBeatList.at(this.numPadding);
             const minutes = dayjs().diff(dayjs.utc(firstValidBeat?.time), "minutes");
@@ -256,10 +239,6 @@ export default {
          */
         timeSinceLastBeat() {
             const lastValidBeat = this.shortBeatList.at(-1);
-            if (!lastValidBeat) {
-                return "";
-            }
-
             const seconds = dayjs().diff(dayjs.utc(lastValidBeat?.time), "seconds");
 
             let tolerance = 60 * 2; // default for when monitorList not available
@@ -267,15 +246,12 @@ export default {
                 tolerance = this.$root.monitorList[this.monitorId].interval * 2;
             }
 
-            // Show exact time if it's more than tolerance, otherwise show "now"
-            const exactTime = dayjs.utc(lastValidBeat.time).tz(this.$root.timezone).format("HH:mm:ss");
-
             if (seconds < tolerance) {
-                return `${this.$t("now")} (${exactTime})`;
+                return this.$t("now");
             } else if (seconds < 60 * 60) {
-                return `${this.$t("time ago", [(seconds / 60).toFixed(0) + "m"])} (${exactTime})`;
+                return this.$t("time ago", [(seconds / 60).toFixed(0) + "m"]);
             } else {
-                return `${this.$t("time ago", [(seconds / 60 / 60).toFixed(0) + "h"])} (${exactTime})`;
+                return this.$t("time ago", [(seconds / 60 / 60).toFixed(0) + "h"]);
             }
         },
 
@@ -426,9 +402,8 @@ export default {
                 return "";
             }
 
-            // Always show full date and time for better clarity
-            const timeStr = this.$root.datetime(beat.time);
-            return `${timeStr}${beat.msg ? ` - ${beat.msg}` : ""}`;
+            // Show timestamp for all beats (both individual and aggregated)
+            return `${this.$root.datetime(beat.time)}${beat.msg ? ` - ${beat.msg}` : ""}`;
         },
 
         /**
