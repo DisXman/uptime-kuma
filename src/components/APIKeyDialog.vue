@@ -174,55 +174,55 @@ export default {
 <style lang="scss" scoped>
 @import "../assets/vars.scss";
 
-// .dark {
-//     .modal-dialog .form-text,
-//     .modal-dialog p {
-//         color: $dark-font-color;
-//     }
-// }
+.dark {
+    .modal-dialog .form-text,
+    .modal-dialog p {
+        color: $dark-font-color;
+    }
+}
 
-// .shadow-box {
-//     padding: 20px;
-// }
+.shadow-box {
+    padding: 20px;
+}
 
-// textarea {
-//     min-height: 150px;
-// }
+textarea {
+    min-height: 150px;
+}
 
-// .dark-calendar::-webkit-calendar-picker-indicator {
-//     filter: invert(1);
-// }
+.dark-calendar::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+}
 
-// .weekday-picker {
-//     display: flex;
-//     gap: 10px;
+.weekday-picker {
+    display: flex;
+    gap: 10px;
 
-//     & > div {
-//         display: flex;
-//         flex-direction: column;
-//         align-items: center;
-//         width: 40px;
+    & > div {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 40px;
 
-//         .form-check-inline {
-//             margin-right: 0;
-//         }
-//     }
-// }
+        .form-check-inline {
+            margin-right: 0;
+        }
+    }
+}
 
-// .day-picker {
-//     display: flex;
-//     gap: 10px;
-//     flex-wrap: wrap;
+.day-picker {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 
-//     & > div {
-//         display: flex;
-//         flex-direction: column;
-//         align-items: center;
-//         width: 40px;
+    & > div {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 40px;
 
-//         .form-check-inline {
-//             margin-right: 0;
-//         }
-//     }
-// }
+        .form-check-inline {
+            margin-right: 0;
+        }
+    }
+}
 </style>
