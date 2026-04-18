@@ -449,7 +449,6 @@ class StatusPage extends BeanModel {
             analyticsScriptUrl: this.analytics_script_url,
             analyticsType: this.analytics_type,
             showCertificateExpiry: !!this.show_certificate_expiry,
-            heartbeatBarDays: this.heartbeat_bar_days,
             showOnlyLastHeartbeat: !!this.show_only_last_heartbeat,
             rssTitle: this.rss_title,
         };
@@ -477,7 +476,6 @@ class StatusPage extends BeanModel {
             analyticsScriptUrl: this.analytics_script_url,
             analyticsType: this.analytics_type,
             showCertificateExpiry: !!this.show_certificate_expiry,
-            heartbeatBarDays: this.heartbeat_bar_days || 0,
             showOnlyLastHeartbeat: !!this.show_only_last_heartbeat,
             rssTitle: this.rss_title,
         };

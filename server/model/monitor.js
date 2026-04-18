@@ -271,7 +271,8 @@ class Monitor extends BeanModel {
     /**
      * Gets certificate expiry for this monitor
      * @param {number} monitorID ID of monitor to send
-     * @returns {Promise<object>} Certificate expiry info for monitor
+     * @returns {Promise<LooseObject<any>>} Certificate expiry info for
+     * monitor
      */
     async getCertExpiry(monitorID) {
         let tlsInfoBean = await R.findOne("monitor_tls_info", "monitor_id = ?", [monitorID]);
