@@ -11,7 +11,116 @@ const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
 dayjs.extend(utc);
 
+const SQL_DATETIME_FORMAT = "YYYY-MM-DD HH:mm:ss";
+
 let router = express.Router();
+
+/**
+ * Return public monitor ids for a status page.
+ * @param {number} statusPageID Status page id
+ * @returns {Promise<number[]>} Public monitor ids
+ */
+async function getPublicStatusPageMonitorIDs(statusPageID) {
+    const monitorIDs = await R.getCol(
+        `
+        SELECT monitor_group.monitor_id FROM monitor_group, \`group\`
+        WHERE monitor_group.group_id = \`group\`.id
+        AND public = 1
+        AND \`group\`.status_page_id = ?
+    `,
+        [statusPageID]
+    );
+
+    return monitorIDs.map((monitorID) => Number(monitorID));
+}
+
+/**
+ * Aggregate heartbeats into evenly spaced buckets while preserving the last known state.
+ * @param {object} options Aggregation options
+ * @param {import("dayjs").Dayjs} options.now Current time
+ * @param {number} options.durationHours Requested duration in hours
+ * @param {number} options.numPoints Number of buckets
+ * @param {import("dayjs").Dayjs | null} options.firstHeartbeatTime First heartbeat time
+ * @param {{ status: number, time: string } | null} options.initialHeartbeat Last heartbeat before the range
+ * @param {{ status: number, time: string, ping: number | null, timestamp: number }[]} options.heartbeats Heartbeats within the range
+ * @returns {{ status: number, time: string, ping: number | null, msg: string }[] | number[]} Aggregated heartbeat buckets
+ */
+function buildHeartbeatBuckets({ now, durationHours, numPoints, firstHeartbeatTime, initialHeartbeat, heartbeats }) {
+    const result = [];
+    const startTime = now.subtract(durationHours, "hour");
+    const totalDurationMs = durationHours * 3600 * 1000;
+    const stepMs = numPoints > 1 ? totalDurationMs / (numPoints - 1) : totalDurationMs;
+    const startTimeMs = startTime.valueOf();
+    const firstHeartbeatMs = firstHeartbeatTime ? firstHeartbeatTime.valueOf() : null;
+
+    let heartbeatIndex = 0;
+    let currentStatus = initialHeartbeat && initialHeartbeat.status !== 2 ? initialHeartbeat.status : null;
+    let lastActualHeartbeatTime =
+        initialHeartbeat && initialHeartbeat.status !== 2 && initialHeartbeat.time
+            ? dayjs.utc(initialHeartbeat.time)
+            : null;
+
+    for (let i = 0; i < numPoints; i++) {
+        const bucketTime = i === numPoints - 1 ? now : dayjs.utc(startTimeMs + i * stepMs);
+        const bucketTimeMs = bucketTime.valueOf();
+        const bucketStartMs = bucketTimeMs - stepMs / 2;
+        const bucketEndMs = bucketTimeMs + stepMs / 2;
+
+        if (!firstHeartbeatMs || bucketEndMs < firstHeartbeatMs) {
+            result.push(0);
+            continue;
+        }
+
+        const heartbeatsInBucket = [];
+        while (heartbeatIndex < heartbeats.length && heartbeats[heartbeatIndex].timestamp < bucketEndMs) {
+            const heartbeat = heartbeats[heartbeatIndex];
+            if (heartbeat.timestamp >= bucketStartMs) {
+                heartbeatsInBucket.push(heartbeat);
+            }
+            heartbeatIndex++;
+        }
+
+        if (heartbeatsInBucket.length === 0) {
+            if (currentStatus === null || !lastActualHeartbeatTime) {
+                result.push(0);
+            } else {
+                result.push({
+                    status: currentStatus,
+                    time: lastActualHeartbeatTime.toISOString(),
+                    ping: null,
+                    msg: "",
+                });
+            }
+            continue;
+        }
+
+        let representativeHeartbeat = heartbeatsInBucket.find((heartbeat) => heartbeat.status === 0);
+        if (!representativeHeartbeat) {
+            representativeHeartbeat = heartbeatsInBucket.find((heartbeat) => heartbeat.status === 3);
+        }
+        if (!representativeHeartbeat) {
+            representativeHeartbeat = heartbeatsInBucket[heartbeatsInBucket.length - 1];
+        }
+
+        currentStatus = representativeHeartbeat.status === 2 ? currentStatus : representativeHeartbeat.status;
+        lastActualHeartbeatTime = dayjs.utc(representativeHeartbeat.time);
+
+        const upHeartbeats = heartbeatsInBucket.filter((heartbeat) => heartbeat.status === 1 && heartbeat.ping != null);
+        const avgPing =
+            upHeartbeats.length > 0
+                ? Math.round(upHeartbeats.reduce((sum, heartbeat) => sum + heartbeat.ping, 0) / upHeartbeats.length)
+                : null;
+
+        result.push({
+            status: currentStatus,
+            time: lastActualHeartbeatTime.toISOString(),
+            ping: avgPing,
+            msg: "",
+        });
+    }
+
+    return result;
+}
 
 let cache = apicache.middleware;
 const server = UptimeKumaServer.getInstance();
@@ -78,6 +187,9 @@ router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (reque
         // Get duration and numPoints from query
         let duration = request.query.duration || "24";
         let durationHours = parseInt(duration);
+        if (Number.isNaN(durationHours) || durationHours <= 0) {
+            durationHours = 24;
+        }
 
         let numPoints = parseInt(request.query.numPoints) || 100;
         // Cap numPoints to reasonable values
@@ -86,130 +198,53 @@ router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (reque
         // Use a single "now" for all monitors to ensure consistency
         let now = dayjs().utc();
 
-        let monitorIDList = await R.getCol(
-            `
-            SELECT monitor_group.monitor_id FROM monitor_group, \`group\`
-            WHERE monitor_group.group_id = \`group\`.id
-            AND public = 1
-            AND \`group\`.status_page_id = ?
-        `,
-            [statusPageID]
+        let monitorIDList = await getPublicStatusPageMonitorIDs(statusPageID);
+        const startTime = now.subtract(durationHours, "hour");
+        const startTimeSql = startTime.format(SQL_DATETIME_FORMAT);
+
+        const monitorResults = await Promise.all(
+            monitorIDList.map(async (monitorID) => {
+                const [firstHeartbeatRow, initialHeartbeat, rawHeartbeats, uptimeCalculator] = await Promise.all([
+                    R.getRow("SELECT time FROM heartbeat WHERE monitor_id = ? ORDER BY time ASC LIMIT 1", [monitorID]),
+                    R.getRow(
+                        "SELECT status, time FROM heartbeat WHERE monitor_id = ? AND time < ? ORDER BY time DESC LIMIT 1",
+                        [monitorID, startTimeSql]
+                    ),
+                    R.getAll(
+                        `
+                    SELECT status, time, ping FROM heartbeat
+                    WHERE monitor_id = ? AND time >= ?
+                    ORDER BY time ASC
+                `,
+                        [monitorID, startTimeSql]
+                    ),
+                    UptimeCalculator.getUptimeCalculator(monitorID),
+                ]);
+
+                const heartbeats = rawHeartbeats.map((heartbeat) => ({
+                    ...heartbeat,
+                    timestamp: dayjs.utc(heartbeat.time).valueOf(),
+                }));
+
+                return {
+                    monitorID,
+                    heartbeatBuckets: buildHeartbeatBuckets({
+                        now,
+                        durationHours,
+                        numPoints,
+                        firstHeartbeatTime:
+                            firstHeartbeatRow && firstHeartbeatRow.time ? dayjs.utc(firstHeartbeatRow.time) : null,
+                        initialHeartbeat,
+                        heartbeats,
+                    }),
+                    uptime: uptimeCalculator.getDataByDuration(`${durationHours}h`).uptime,
+                };
+            })
         );
 
-        for (let monitorID of monitorIDList) {
-            let result = [];
-            let startTime = now.subtract(durationHours, "hour");
-
-            // Spread points from startTime to now exactly
-            // Step size = (duration in seconds) / (numPoints - 1)
-            const stepSeconds = (durationHours * 3600) / (numPoints - 1);
-
-            // Fetch the last heartbeat BEFORE the startTime to know the initial state
-            // Use SQL_DATETIME_FORMAT for consistency
-            const SQL_DATETIME_FORMAT = "YYYY-MM-DD HH:mm:ss";
-            // Monitörün tarihteki en ilk pingi (oluşturulma veya aktifleşme anı) - GÜVENLİ ÇAĞRI (R.getRow)
-            let veryFirstHeartbeatRow = await R.getRow("SELECT time FROM heartbeat WHERE monitor_id = ? ORDER BY time ASC LIMIT 1", [monitorID]);
-            let firstHeartbeatTime = veryFirstHeartbeatRow && veryFirstHeartbeatRow.time ? dayjs.utc(veryFirstHeartbeatRow.time) : null;
-
-            let initialHeartbeat = await R.getRow(
-                "SELECT status FROM heartbeat WHERE monitor_id = ? AND time < ? ORDER BY time DESC LIMIT 1",
-                [monitorID, startTime.format(SQL_DATETIME_FORMAT)]
-            );
-
-            let currentStatus = initialHeartbeat && initialHeartbeat.status !== 2 ? initialHeartbeat.status : null;
-
-            // Fetch raw heartbeats for the period for better accuracy
-            let heartbeats = await R.getAll(
-                `
-                SELECT status, time, ping FROM heartbeat
-                WHERE monitor_id = ? AND time >= ?
-                ORDER BY time ASC
-            `,
-                [monitorID, startTime.format(SQL_DATETIME_FORMAT)]
-            );
-
-            // Aggregate heartbeats into buckets
-            for (let i = 0; i < numPoints; i++) {
-                let bucketTime = startTime.add(i * stepSeconds, "second");
-                // For the very last point, ensure it's exactly 'now' to avoid "X minutes ago"
-                if (i === numPoints - 1) {
-                    bucketTime = now;
-                }
-
-                // Use a slightly larger window for bucket matching to avoid missing heartbeats
-                // precisely at the boundaries
-                let bucketStartTime = bucketTime.subtract(stepSeconds / 2, "second");
-                let bucketEndTime = bucketTime.add(stepSeconds / 2, "second");
-
-                // Çok kritik blok: Eğer bu zaman dilimi, monitörün kurulduğu/ilk ping attığı zamandan ÖNCE ise:
-                if (!firstHeartbeatTime || bucketEndTime.isBefore(firstHeartbeatTime)) {
-                    result.push(0); // 0 değeri frontend tarafından doğrudan 'empty: true' (Gri) olarak algılanır.
-                    continue; // Geri kalan renk hesaplamalarını atla
-                }
-
-                let heartbeatsInBucket = heartbeats.filter((h) => {
-                    // Database time is UTC string, parse it as UTC
-                    let hTime = dayjs.utc(h.time);
-                    return (
-                        (hTime.isAfter(bucketStartTime) || hTime.isSame(bucketStartTime)) &&
-                        hTime.isBefore(bucketEndTime)
-                    );
-                });
-
-                let status = currentStatus;
-                let avgPing = null;
-                let bucketTimestamp = bucketTime.toISOString(); // Default to bucket center
-
-                if (heartbeatsInBucket.length > 0) {
-                    // Find the "representative" heartbeat for this bucket
-                    // Priority: DOWN (0) > MAINTENANCE (3) > UP (1)
-                    let downBeat = heartbeatsInBucket.find((h) => h.status === 0);
-                    let maintenanceBeat = heartbeatsInBucket.find((h) => h.status === 3);
-                    let upBeat = heartbeatsInBucket[heartbeatsInBucket.length - 1]; // Get latest for UP
-
-                    if (downBeat) {
-                        status = 0;
-                        bucketTimestamp = dayjs.utc(downBeat.time).toISOString();
-                    } else if (maintenanceBeat) {
-                        status = 3;
-                        bucketTimestamp = dayjs.utc(maintenanceBeat.time).toISOString();
-                    } else if (upBeat) {
-                        status = 1;
-                        bucketTimestamp = dayjs.utc(upBeat.time).toISOString();
-                    }
-
-                    // Update currentStatus for the next bucket
-                    currentStatus = status;
-
-                    let upBeats = heartbeatsInBucket.filter((h) => h.status === 1);
-                    if (upBeats.length > 0) {
-                        let sum = heartbeatsInBucket.reduce((acc, h) => acc + (h.ping || 0), 0);
-                        avgPing = Math.round(sum / heartbeatsInBucket.length);
-                    }
-
-                    currentStatus = status;
-                } else {
-                    // EĞER VERİTABANINDA BU ZAMAN DİLİMİNE AİT HİÇ VERİ YOKSA:
-                    // Son bilinen durumu taşımak yerine, durumu mecburen null (gri) yapıyoruz.
-                    status = null;
-                }
-
-                if (status === null) {
-                    result.push(0);
-                } else {
-                    result.push({
-                        status: status,
-                        time: bucketTimestamp,
-                        ping: avgPing,
-                        msg: "",
-                    });
-                }
-            }
-
-            heartbeatList[monitorID] = result;
-            const uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
-            let uptimeResult = uptimeCalculator.getDataByDuration(durationHours + "h");
-            uptimeList[`${monitorID}_${durationHours}`] = uptimeResult.uptime;
+        for (const monitorResult of monitorResults) {
+            heartbeatList[monitorResult.monitorID] = monitorResult.heartbeatBuckets;
+            uptimeList[`${monitorResult.monitorID}_${durationHours}`] = monitorResult.uptime;
         }
 
         response.json({
@@ -387,8 +422,22 @@ router.get("/api/status-page/monitor-downtime/:slug/:monitorID", cache("1 minute
             return;
         }
 
-        let monitorID = request.params.monitorID;
-        let durationHours = parseInt(request.query.duration) || 24;
+        let monitorID = parseInt(request.params.monitorID);
+        if (Number.isNaN(monitorID)) {
+            sendHttpError(response, "Invalid Monitor ID");
+            return;
+        }
+
+        let monitorIDList = await getPublicStatusPageMonitorIDs(statusPageID);
+        if (!monitorIDList.includes(monitorID)) {
+            sendHttpError(response, "Monitor Not Found");
+            return;
+        }
+
+        let durationHours = parseInt(request.query.duration);
+        if (Number.isNaN(durationHours) || durationHours <= 0) {
+            durationHours = 24;
+        }
         let startTime = dayjs().utc().subtract(durationHours, "hour");
 
         // Fetch raw heartbeats
@@ -398,7 +447,7 @@ router.get("/api/status-page/monitor-downtime/:slug/:monitorID", cache("1 minute
             WHERE monitor_id = ? AND time >= ?
             ORDER BY time ASC
         `,
-            [monitorID, startTime.format("YYYY-MM-DD HH:mm:ss")]
+            [monitorID, startTime.format(SQL_DATETIME_FORMAT)]
         );
 
         let downPeriods = [];
@@ -416,7 +465,7 @@ router.get("/api/status-page/monitor-downtime/:slug/:monitorID", cache("1 minute
                 currentDown = null;
             }
         }
-        
+
         // If it's still down at the end of the query
         if (currentDown) {
             currentDown.end = dayjs().utc().format("YYYY-MM-DD HH:mm:ss");
