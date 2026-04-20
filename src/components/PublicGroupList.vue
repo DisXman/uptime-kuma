@@ -94,9 +94,16 @@
                                             <font-awesome-icon
                                                 icon="info-circle"
                                                 class="action ms-2"
-                                                style="cursor: pointer; color: #a9a9a9; margin-left: 10px;"
-                                                title="Çökme Geçmişi"
-                                                @click="$refs.downtimeDetailsDialog.show($route.params.slug, monitor.element.id, duration, monitor.element.name)"
+                                                style="cursor: pointer; color: #a9a9a9; margin-left: 10px"
+                                                :title="$t('Open Downtime History')"
+                                                @click="
+                                                    $refs.downtimeDetailsDialog.show(
+                                                        $route.params.slug,
+                                                        monitor.element.id,
+                                                        duration,
+                                                        monitor.element.name
+                                                    )
+                                                "
                                             />
                                         </div>
                                         <div class="extra-info">
@@ -124,7 +131,11 @@
                                         </div>
                                     </div>
                                     <div :key="$root.userHeartbeatBar" class="col-3 col-xl-6">
-                                        <HeartbeatBar size="mid" :monitor-id="monitor.element.id" :duration="duration" />
+                                        <HeartbeatBar
+                                            size="mid"
+                                            :monitor-id="monitor.element.id"
+                                            :duration="duration"
+                                        />
                                     </div>
                                 </div>
                             </div>
