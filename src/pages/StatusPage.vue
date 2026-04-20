@@ -488,14 +488,52 @@
                     👀 {{ $t("statusPageNothing") }}
                 </div>
 
-                <div v-if="!config.showOnlyLastHeartbeat" class="mb-4 d-flex justify-content-end align-items-center duration-selector">
+                <div
+                    v-if="!config.showOnlyLastHeartbeat"
+                    class="mb-4 d-flex justify-content-end align-items-center duration-selector"
+                >
                     <span class="me-2 text-secondary small">{{ $t("Uptime") }}:</span>
                     <div class="btn-group btn-group-sm" role="group">
-                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '24' }" @click="setDuration('24')">1d</button>
-                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '48' }" @click="setDuration('48')">2d</button>
-                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '72' }" @click="setDuration('72')">3d</button>
-                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '96' }" @click="setDuration('96')">4d</button>
-                        <button type="button" class="btn btn-outline-primary" :class="{ active: duration === '120' }" @click="setDuration('120')">5d</button>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary"
+                            :class="{ active: duration === '24' }"
+                            @click="setDuration('24')"
+                        >
+                            1d
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary"
+                            :class="{ active: duration === '48' }"
+                            @click="setDuration('48')"
+                        >
+                            2d
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary"
+                            :class="{ active: duration === '72' }"
+                            @click="setDuration('72')"
+                        >
+                            3d
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary"
+                            :class="{ active: duration === '96' }"
+                            @click="setDuration('96')"
+                        >
+                            4d
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary"
+                            :class="{ active: duration === '120' }"
+                            @click="setDuration('120')"
+                        >
+                            5d
+                        </button>
                     </div>
                 </div>
 
@@ -718,6 +756,7 @@ export default {
             lastUpdateTime: dayjs(),
             updateCountdown: null,
             updateCountdownText: null,
+            resizeTimeout: null,
             loading: true,
             incidentHistory: [],
             incidentHistoryLoading: false,
@@ -1015,13 +1054,6 @@ export default {
 
                 this.loading = false;
 
-                feedInterval = setInterval(
-                    () => {
-                        this.updateHeartbeatList();
-                    },
-                    Math.max(5, this.config.autoRefreshInterval) * 1000
-                );
-
                 this.incident = res.data.incident;
                 this.maintenanceList = res.data.maintenanceList;
                 this.$root.publicGroupList = res.data.publicGroupList;
@@ -1036,6 +1068,7 @@ export default {
                     Math.max(5, this.config.autoRefreshInterval) * 1000
                 );
 
+                this.updateHeartbeatList();
                 this.updateUpdateTimer();
             })
             .catch(function (error) {
@@ -1045,13 +1078,19 @@ export default {
                 console.log(error);
             });
 
-        this.updateHeartbeatList();
         this.loadIncidentHistory();
 
         // Go to edit page if ?edit present
         // null means ?edit present, but no value
         if (this.$route.query.edit || this.$route.query.edit === null) {
             this.edit();
+        }
+    },
+    unmounted() {
+        clearInterval(feedInterval);
+        clearInterval(this.updateCountdown);
+        if (this.resizeTimeout) {
+            clearTimeout(this.resizeTimeout);
         }
     },
     methods: {
@@ -1088,37 +1127,40 @@ export default {
         updateHeartbeatList() {
             // If editMode, it will use the data from websocket.
             if (!this.editMode) {
-                // Add a timestamp to bypass any browser cache
-                axios.get("/api/status-page/heartbeat/" + this.slug, {
-                    params: {
-                        duration: this.duration,
-                        numPoints: this.maxBeat,
-                        t: Date.now(),
-                    },
-                }).then((res) => {
-                    const { heartbeatList, uptimeList } = res.data;
+                axios
+                    .get("/api/status-page/heartbeat/" + this.slug, {
+                        params: {
+                            duration: this.duration,
+                            numPoints: this.maxBeat,
+                        },
+                    })
+                    .then((res) => {
+                        const { heartbeatList, uptimeList } = res.data;
 
-                    this.$root.heartbeatList = heartbeatList;
-                    this.$root.uptimeList = uptimeList;
+                        this.$root.heartbeatList = heartbeatList;
+                        this.$root.uptimeList = uptimeList;
 
-                    const heartbeatIds = Object.keys(heartbeatList);
-                    const downMonitors = heartbeatIds.reduce((downMonitorsAmount, currentId) => {
-                        const monitorHeartbeats = heartbeatList[currentId];
-                        const lastHeartbeat = monitorHeartbeats && monitorHeartbeats.length > 0 ? monitorHeartbeats[monitorHeartbeats.length - 1] : null;
+                        const heartbeatIds = Object.keys(heartbeatList);
+                        const downMonitors = heartbeatIds.reduce((downMonitorsAmount, currentId) => {
+                            const monitorHeartbeats = heartbeatList[currentId];
+                            const lastHeartbeat =
+                                monitorHeartbeats && monitorHeartbeats.length > 0
+                                    ? monitorHeartbeats[monitorHeartbeats.length - 1]
+                                    : null;
 
-                        if (lastHeartbeat) {
-                            return lastHeartbeat.status === 0 ? downMonitorsAmount + 1 : downMonitorsAmount;
-                        } else {
-                            return downMonitorsAmount;
-                        }
-                    }, 0);
+                            if (lastHeartbeat) {
+                                return lastHeartbeat.status === 0 ? downMonitorsAmount + 1 : downMonitorsAmount;
+                            } else {
+                                return downMonitorsAmount;
+                            }
+                        }, 0);
 
-                    favicon.badge(downMonitors);
+                        favicon.badge(downMonitors);
 
-                    this.loadedData = true;
-                    this.lastUpdateTime = dayjs();
-                    this.updateUpdateTimer();
-                });
+                        this.loadedData = true;
+                        this.lastUpdateTime = dayjs();
+                        this.updateUpdateTimer();
+                    });
             }
         },
 
