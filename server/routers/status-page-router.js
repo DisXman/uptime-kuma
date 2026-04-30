@@ -467,24 +467,32 @@ router.get("/api/status-page/monitor-downtime/:slug/:monitorID", cache("1 minute
         }
         let startTime = dayjs().utc().subtract(durationHours, "hour");
 
-        // Fetch raw heartbeats
-        let heartbeats = await R.getAll(
-            `
-            SELECT status, time FROM heartbeat
-            WHERE monitor_id = ? AND time >= ?
-            ORDER BY time ASC
-        `,
-            [monitorID, startTime.format(SQL_DATETIME_FORMAT)]
-        );
+        const startTimeSql = startTime.format(SQL_DATETIME_FORMAT);
+
+        // Fetch raw heartbeats and the last known state before the selected range.
+        const [previousHeartbeat, heartbeats] = await Promise.all([
+            R.getRow(
+                "SELECT status, time FROM heartbeat WHERE monitor_id = ? AND time < ? ORDER BY time DESC LIMIT 1",
+                [monitorID, startTimeSql]
+            ),
+            R.getAll(
+                `
+                SELECT status, time FROM heartbeat
+                WHERE monitor_id = ? AND time >= ?
+                ORDER BY time ASC
+            `,
+                [monitorID, startTimeSql]
+            ),
+        ]);
 
         let downPeriods = [];
-        let currentDown = null;
+        let currentDown = previousHeartbeat && previousHeartbeat.status === DOWN ? { start: startTimeSql } : null;
 
         for (let h of heartbeats) {
-            if (h.status === 0 && !currentDown) {
+            if (h.status === DOWN && !currentDown) {
                 // System just went DOWN
                 currentDown = { start: h.time };
-            } else if (h.status !== 0 && currentDown) {
+            } else if (h.status === UP && currentDown) {
                 // System came back UP
                 currentDown.end = h.time;
                 currentDown.durationMins = dayjs.utc(currentDown.end).diff(dayjs.utc(currentDown.start), "minute");
