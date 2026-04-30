@@ -750,6 +750,7 @@ export default {
             loadedData: false,
             duration: "24",
             maxBeat: 100,
+            heartbeatRequestId: 0,
             baseURL: "",
             clickedEditButton: false,
             maintenanceList: [],
@@ -1127,14 +1128,21 @@ export default {
         updateHeartbeatList() {
             // If editMode, it will use the data from websocket.
             if (!this.editMode) {
+                const requestDuration = this.duration;
+                const requestId = ++this.heartbeatRequestId;
+
                 axios
                     .get("/api/status-page/heartbeat/" + this.slug, {
                         params: {
-                            duration: this.duration,
+                            duration: requestDuration,
                             numPoints: this.maxBeat,
                         },
                     })
                     .then((res) => {
+                        if (requestId !== this.heartbeatRequestId || requestDuration !== this.duration) {
+                            return;
+                        }
+
                         const { heartbeatList, uptimeList } = res.data;
 
                         this.$root.heartbeatList = heartbeatList;

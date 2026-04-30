@@ -4,7 +4,7 @@ const { UptimeKumaServer } = require("../uptime-kuma-server");
 const StatusPage = require("../model/status_page");
 const { allowDevAllOrigin, sendHttpError } = require("../util-server");
 const { R } = require("redbean-node");
-const { badgeConstants } = require("../../src/util");
+const { DOWN, UP, MAINTENANCE, badgeConstants } = require("../../src/util");
 const { makeBadge } = require("badge-maker");
 const { UptimeCalculator } = require("../uptime-calculator");
 const dayjs = require("dayjs");
@@ -12,6 +12,7 @@ const utc = require("dayjs/plugin/utc");
 dayjs.extend(utc);
 
 const SQL_DATETIME_FORMAT = "YYYY-MM-DD HH:mm:ss";
+const HOUR_MS = 3600 * 1000;
 
 let router = express.Router();
 
@@ -35,41 +36,36 @@ async function getPublicStatusPageMonitorIDs(statusPageID) {
 }
 
 /**
- * Aggregate heartbeats into evenly spaced buckets while preserving the last known state.
+ * Aggregate heartbeats into independent, evenly spaced buckets.
  * @param {object} options Aggregation options
  * @param {import("dayjs").Dayjs} options.now Current time
  * @param {number} options.durationHours Requested duration in hours
  * @param {number} options.numPoints Number of buckets
- * @param {import("dayjs").Dayjs | null} options.firstHeartbeatTime First heartbeat time
- * @param {{ status: number, time: string } | null} options.initialHeartbeat Last heartbeat before the range
  * @param {{ status: number, time: string, ping: number | null, timestamp: number }[]} options.heartbeats Heartbeats within the range
+ * @param {{ timestamp: number, up: number, down: number, maintenance?: number, avgPing: number | null }[]} options.hourlyStats Hourly uptime stats within the range
  * @returns {{ status: number, time: string, ping: number | null, msg: string }[] | number[]} Aggregated heartbeat buckets
  */
-function buildHeartbeatBuckets({ now, durationHours, numPoints, firstHeartbeatTime, initialHeartbeat, heartbeats }) {
+function buildHeartbeatBuckets({
+    now,
+    durationHours,
+    numPoints,
+    heartbeats,
+    hourlyStats = [],
+}) {
     const result = [];
     const startTime = now.subtract(durationHours, "hour");
     const totalDurationMs = durationHours * 3600 * 1000;
     const stepMs = numPoints > 1 ? totalDurationMs / (numPoints - 1) : totalDurationMs;
     const startTimeMs = startTime.valueOf();
-    const firstHeartbeatMs = firstHeartbeatTime ? firstHeartbeatTime.valueOf() : null;
 
     let heartbeatIndex = 0;
-    let currentStatus = initialHeartbeat && initialHeartbeat.status !== 2 ? initialHeartbeat.status : null;
-    let lastActualHeartbeatTime =
-        initialHeartbeat && initialHeartbeat.status !== 2 && initialHeartbeat.time
-            ? dayjs.utc(initialHeartbeat.time)
-            : null;
+    let hourlyStatIndex = 0;
 
     for (let i = 0; i < numPoints; i++) {
         const bucketTime = i === numPoints - 1 ? now : dayjs.utc(startTimeMs + i * stepMs);
         const bucketTimeMs = bucketTime.valueOf();
         const bucketStartMs = bucketTimeMs - stepMs / 2;
         const bucketEndMs = bucketTimeMs + stepMs / 2;
-
-        if (!firstHeartbeatMs || bucketEndMs < firstHeartbeatMs) {
-            result.push(0);
-            continue;
-        }
 
         const heartbeatsInBucket = [];
         while (heartbeatIndex < heartbeats.length && heartbeats[heartbeatIndex].timestamp < bucketEndMs) {
@@ -80,40 +76,71 @@ function buildHeartbeatBuckets({ now, durationHours, numPoints, firstHeartbeatTi
             heartbeatIndex++;
         }
 
-        if (heartbeatsInBucket.length === 0) {
-            if (currentStatus === null || !lastActualHeartbeatTime) {
-                result.push(0);
-            } else {
-                result.push({
-                    status: currentStatus,
-                    time: lastActualHeartbeatTime.toISOString(),
-                    ping: null,
-                    msg: "",
-                });
+        while (
+            hourlyStatIndex < hourlyStats.length &&
+            hourlyStats[hourlyStatIndex].timestamp + HOUR_MS <= bucketStartMs
+        ) {
+            hourlyStatIndex++;
+        }
+
+        const hourlyStatsInBucket = [];
+        for (let statIndex = hourlyStatIndex; statIndex < hourlyStats.length; statIndex++) {
+            const stat = hourlyStats[hourlyStatIndex];
+            if (stat.timestamp >= bucketEndMs) {
+                break;
             }
+            if (stat.timestamp + HOUR_MS > bucketStartMs) {
+                hourlyStatsInBucket.push(stat);
+            }
+        }
+
+        if (heartbeatsInBucket.length === 0) {
+            if (hourlyStatsInBucket.length > 0) {
+                const totalDown = hourlyStatsInBucket.reduce((sum, stat) => sum + (stat.down || 0), 0);
+                const totalMaintenance = hourlyStatsInBucket.reduce((sum, stat) => sum + (stat.maintenance || 0), 0);
+                const totalUp = hourlyStatsInBucket.reduce((sum, stat) => sum + (stat.up || 0), 0);
+
+                if (totalDown > 0 || totalMaintenance > 0 || totalUp > 0) {
+                    const upStats = hourlyStatsInBucket.filter((stat) => stat.up > 0 && stat.avgPing != null);
+                    const avgPing =
+                        upStats.length > 0
+                            ? Math.round(
+                                  upStats.reduce((sum, stat) => sum + stat.avgPing * stat.up, 0) /
+                                      upStats.reduce((sum, stat) => sum + stat.up, 0)
+                              )
+                            : null;
+
+                    result.push({
+                        status: totalDown > 0 ? DOWN : totalMaintenance > 0 ? MAINTENANCE : UP,
+                        time: bucketTime.toISOString(),
+                        ping: avgPing,
+                        msg: "",
+                    });
+                    continue;
+                }
+            }
+
+            result.push(0);
             continue;
         }
 
-        let representativeHeartbeat = heartbeatsInBucket.find((heartbeat) => heartbeat.status === 0);
+        let representativeHeartbeat = heartbeatsInBucket.find((heartbeat) => heartbeat.status === DOWN);
         if (!representativeHeartbeat) {
-            representativeHeartbeat = heartbeatsInBucket.find((heartbeat) => heartbeat.status === 3);
+            representativeHeartbeat = heartbeatsInBucket.find((heartbeat) => heartbeat.status === MAINTENANCE);
         }
         if (!representativeHeartbeat) {
             representativeHeartbeat = heartbeatsInBucket[heartbeatsInBucket.length - 1];
         }
 
-        currentStatus = representativeHeartbeat.status === 2 ? currentStatus : representativeHeartbeat.status;
-        lastActualHeartbeatTime = dayjs.utc(representativeHeartbeat.time);
-
-        const upHeartbeats = heartbeatsInBucket.filter((heartbeat) => heartbeat.status === 1 && heartbeat.ping != null);
+        const upHeartbeats = heartbeatsInBucket.filter((heartbeat) => heartbeat.status === UP && heartbeat.ping != null);
         const avgPing =
             upHeartbeats.length > 0
                 ? Math.round(upHeartbeats.reduce((sum, heartbeat) => sum + heartbeat.ping, 0) / upHeartbeats.length)
                 : null;
 
         result.push({
-            status: currentStatus,
-            time: lastActualHeartbeatTime.toISOString(),
+            status: representativeHeartbeat.status,
+            time: dayjs.utc(representativeHeartbeat.time).toISOString(),
             ping: avgPing,
             msg: "",
         });
@@ -204,12 +231,7 @@ router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (reque
 
         const monitorResults = await Promise.all(
             monitorIDList.map(async (monitorID) => {
-                const [firstHeartbeatRow, initialHeartbeat, rawHeartbeats, uptimeCalculator] = await Promise.all([
-                    R.getRow("SELECT time FROM heartbeat WHERE monitor_id = ? ORDER BY time ASC LIMIT 1", [monitorID]),
-                    R.getRow(
-                        "SELECT status, time FROM heartbeat WHERE monitor_id = ? AND time < ? ORDER BY time DESC LIMIT 1",
-                        [monitorID, startTimeSql]
-                    ),
+                const [rawHeartbeats, uptimeCalculator] = await Promise.all([
                     R.getAll(
                         `
                     SELECT status, time, ping FROM heartbeat
@@ -225,6 +247,13 @@ router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (reque
                     ...heartbeat,
                     timestamp: dayjs.utc(heartbeat.time).valueOf(),
                 }));
+                const hourlyStats = uptimeCalculator
+                    .getDataArray(durationHours, "hour")
+                    .map((stat) => ({
+                        ...stat,
+                        timestamp: stat.timestamp * 1000,
+                    }))
+                    .sort((a, b) => a.timestamp - b.timestamp);
 
                 return {
                     monitorID,
@@ -232,10 +261,8 @@ router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (reque
                         now,
                         durationHours,
                         numPoints,
-                        firstHeartbeatTime:
-                            firstHeartbeatRow && firstHeartbeatRow.time ? dayjs.utc(firstHeartbeatRow.time) : null,
-                        initialHeartbeat,
                         heartbeats,
+                        hourlyStats,
                     }),
                     uptime: uptimeCalculator.getDataByDuration(`${durationHours}h`).uptime,
                 };
