@@ -45,13 +45,7 @@ async function getPublicStatusPageMonitorIDs(statusPageID) {
  * @param {{ timestamp: number, up: number, down: number, maintenance?: number, avgPing: number | null }[]} options.hourlyStats Hourly uptime stats within the range
  * @returns {{ status: number, time: string, ping: number | null, msg: string }[] | number[]} Aggregated heartbeat buckets
  */
-function buildHeartbeatBuckets({
-    now,
-    durationHours,
-    numPoints,
-    heartbeats,
-    hourlyStats = [],
-}) {
+function buildHeartbeatBuckets({ now, durationHours, numPoints, heartbeats, hourlyStats = [] }) {
     const result = [];
     const startTime = now.subtract(durationHours, "hour");
     const totalDurationMs = durationHours * 3600 * 1000;
@@ -132,7 +126,9 @@ function buildHeartbeatBuckets({
             representativeHeartbeat = heartbeatsInBucket[heartbeatsInBucket.length - 1];
         }
 
-        const upHeartbeats = heartbeatsInBucket.filter((heartbeat) => heartbeat.status === UP && heartbeat.ping != null);
+        const upHeartbeats = heartbeatsInBucket.filter(
+            (heartbeat) => heartbeat.status === UP && heartbeat.ping != null
+        );
         const avgPing =
             upHeartbeats.length > 0
                 ? Math.round(upHeartbeats.reduce((sum, heartbeat) => sum + heartbeat.ping, 0) / upHeartbeats.length)
@@ -147,6 +143,23 @@ function buildHeartbeatBuckets({
     }
 
     return result;
+}
+
+/**
+ * Calculate uptime from exact heartbeat rows in the selected range.
+ * @param {{ status: number }[]} heartbeats Heartbeats within the selected range
+ * @returns {number | null} Uptime ratio, or null if there is no UP/DOWN data
+ */
+function calculateUptimeFromHeartbeats(heartbeats) {
+    const upCount = heartbeats.filter((heartbeat) => heartbeat.status === UP).length;
+    const downCount = heartbeats.filter((heartbeat) => heartbeat.status === DOWN).length;
+    const total = upCount + downCount;
+
+    if (total === 0) {
+        return null;
+    }
+
+    return upCount / total;
 }
 
 let cache = apicache.middleware;
@@ -264,7 +277,7 @@ router.get("/api/status-page/heartbeat/:slug", cache("10 seconds"), async (reque
                         heartbeats,
                         hourlyStats,
                     }),
-                    uptime: uptimeCalculator.getDataByDuration(`${durationHours}h`).uptime,
+                    uptime: calculateUptimeFromHeartbeats(heartbeats),
                 };
             })
         );
