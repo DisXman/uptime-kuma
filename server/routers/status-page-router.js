@@ -79,7 +79,7 @@ function buildHeartbeatBuckets({ now, durationHours, numPoints, heartbeats, hour
 
         const hourlyStatsInBucket = [];
         for (let statIndex = hourlyStatIndex; statIndex < hourlyStats.length; statIndex++) {
-            const stat = hourlyStats[hourlyStatIndex];
+            const stat = hourlyStats[statIndex];
             if (stat.timestamp >= bucketEndMs) {
                 break;
             }
@@ -90,11 +90,10 @@ function buildHeartbeatBuckets({ now, durationHours, numPoints, heartbeats, hour
 
         if (heartbeatsInBucket.length === 0) {
             if (hourlyStatsInBucket.length > 0) {
-                const totalDown = hourlyStatsInBucket.reduce((sum, stat) => sum + (stat.down || 0), 0);
                 const totalMaintenance = hourlyStatsInBucket.reduce((sum, stat) => sum + (stat.maintenance || 0), 0);
                 const totalUp = hourlyStatsInBucket.reduce((sum, stat) => sum + (stat.up || 0), 0);
 
-                if (totalDown > 0 || totalMaintenance > 0 || totalUp > 0) {
+                if (totalMaintenance > 0 || totalUp > 0) {
                     const upStats = hourlyStatsInBucket.filter((stat) => stat.up > 0 && stat.avgPing != null);
                     const avgPing =
                         upStats.length > 0
@@ -105,7 +104,7 @@ function buildHeartbeatBuckets({ now, durationHours, numPoints, heartbeats, hour
                             : null;
 
                     result.push({
-                        status: totalDown > 0 ? DOWN : totalMaintenance > 0 ? MAINTENANCE : UP,
+                        status: totalMaintenance > 0 ? MAINTENANCE : UP,
                         time: bucketTime.toISOString(),
                         ping: avgPing,
                         msg: "",
